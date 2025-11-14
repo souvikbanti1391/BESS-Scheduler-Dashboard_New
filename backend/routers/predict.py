@@ -13,6 +13,8 @@ class ForecastRequest(BaseModel):
 @router.post('/')
 def predict(req: ForecastRequest):
     df = pd.DataFrame(req.data)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+df["mcp"] = pd.to_numeric(df["mcp"], errors="coerce")
     engine = EnsembleEngine(models_dir="backend/models")
     fc = engine.forecast(df, req.horizon_days, req.model_name)
     return {"forecast": fc.to_dict(orient='records'), "model_used": req.model_name}
