@@ -24,6 +24,7 @@ if df is None:
 st.success("Using globally uploaded MCP data")
 st.plotly_chart(plot_last_7days(df))
 
+
 # Forecast controls
 horizon = st.slider("Forecast days", 1, 7, 1)
 model = st.selectbox("Select Prediction Model",
