@@ -1,4 +1,3 @@
-
 # frontend/pages/IEX_Predictor.py
 
 import streamlit as st
