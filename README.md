@@ -1,1 +1,1 @@
-BESS Optimiser - Full upgraded clean repo
+BESS Optimiser
