@@ -1,24 +1,52 @@
 import streamlit as st
 from PIL import Image
 import os
+from utils.csv_validator import validate_and_standardize
 
 st.set_page_config(page_title='BESS Optimiser', layout='wide')
 
-# Tiles dashboard
+# -------------------------
+# GLOBAL SIDEBAR UPLOAD
+# -------------------------
+st.sidebar.header("📂 Upload MCP File (Global)")
+
+uploaded = st.sidebar.file_uploader(
+    "Upload MCP CSV/Excel (one-time upload)",
+    type=["csv", "xls", "xlsx"]
+)
+
+if uploaded:
+    try:
+        df = validate_and_standardize(uploaded)
+        st.session_state["uploaded_df"] = df
+        st.sidebar.success("File uploaded & validated successfully!")
+    except Exception as e:
+        st.session_state["uploaded_df"] = None
+        st.sidebar.error(f"Validation error: {e}")
+
+# -------------------------
+# HOME PAGE UI
+# -------------------------
+st.title("🔋 BESS Optimiser – Dashboard")
+
+logo='frontend/assets/dvc_logo.png'
+bess='frontend/assets/bess_image.png'
+
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.image('frontend/assets/dvc_logo.png', width=120)
-    st.markdown('### IEX MCP Predictor')
-    st.markdown('Upload MCP data, validate and forecast')
+    if os.path.exists(logo):
+        st.image(logo, width=120)
+    st.markdown("### 🔍 IEX Predictor")
+    st.markdown("Predict MCP using ML & ensemble models.")
 
 with col2:
-    st.image('frontend/assets/bess_image.png', width=220)
-    st.markdown('### BESS Scheduler')
-    st.markdown('Create optimal charging/discharging schedule')
+    if os.path.exists(bess):
+        st.image(bess, width=200)
+    st.markdown("### ⚡ BESS Scheduler")
+    st.markdown("Optimise BESS charge/discharge cycles.")
 
 with col3:
-    st.markdown('### Reports & Models')
-    st.markdown('Generate PDF reports and view model status')
+    st.markdown("### 📝 PDF Reports")
+    st.markdown("Download professional analysis reports.")
 
-st.title('Welcome to BESS Optimiser (DVC)')
-st.write('Use the sidebar to navigate to Predictor, Scheduler, or Reports.')
+st.write("Use the sidebar to upload data only **once**. All sections will use the same dataset.")
