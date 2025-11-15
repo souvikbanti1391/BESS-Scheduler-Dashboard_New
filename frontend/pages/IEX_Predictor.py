@@ -1,5 +1,6 @@
 # frontend/pages/IEX_Predictor.py
-# Final corrected predictor page — uses backend API (set API_BASE in Streamlit secrets)
+# FINAL VERSION (with PDF report generation integrated)
+
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import requests
 
 from plot_helpers import market_style_line, heatmap_last7_with_bands, plot_forecast_with_ci, prepare_df
 from forecast_metrics import compute_forecast_metrics, metric_cards_data, plot_error_distribution, compute_confidence_from_history
+from Report_Generator import generate_pdf_report   # <-- PDF REPORT IMPORT
 
 st.set_page_config(page_title="BESS Scheduler Intelligence", layout="wide", initial_sidebar_state="expanded")
 
@@ -162,7 +164,23 @@ except Exception as e:
     st.error(f"Heatmap rendering error: {e}")
 
 # -----------------------
-# Forecast block: model selection + run
+# PDF REPORT GENERATOR BUTTON
+# -----------------------
+st.markdown("---")
+st.subheader("📄 Generate PDF Report")
+
+if st.button("Generate PDF Report"):
+    with st.spinner("Building PDF report..."):
+        pdf_bytes = generate_pdf_report(df_clean)
+    st.download_button(
+        "Download MCP Report (PDF)",
+        data=pdf_bytes,
+        file_name="BESS_MCP_Report.pdf",
+        mime="application/pdf"
+    )
+
+# -----------------------
+# Forecast block
 # -----------------------
 st.markdown("---")
 st.subheader("Forecast (1–7 days)")
@@ -175,7 +193,6 @@ with col2:
 with col3:
     show_metrics = st.checkbox("Show forecast metrics & CI", value=True)
 
-# run forecast: call backend API
 if run_forecast:
     API = st.secrets.get("API_BASE", "")
     if not API:
@@ -188,7 +205,7 @@ if run_forecast:
         }
         try:
             with st.spinner("Running backend forecast..."):
-                r = requests.post(f"{API}/predict/", json=payload, timeout=90)
+                r = requests.post(f"{API}/predict/", json=payload, timeout=120)
                 r.raise_for_status()
                 resp = r.json()
                 forecast_list = resp.get("forecast", [])
@@ -199,7 +216,6 @@ if run_forecast:
                     fig_fc = plot_forecast_with_ci(df_clean, forecast_df, ci=0.9)
                     st.plotly_chart(fig_fc, use_container_width=True)
 
-                    # compute metrics
                     actuals = df_clean[df_clean["timestamp"].isin(pd.to_datetime(forecast_df["timestamp"], errors="coerce"))]
                     actuals = actuals[["timestamp", "mcp"]].rename(columns={"mcp": "mcp_act"})
                     merged = None
@@ -209,10 +225,10 @@ if run_forecast:
                             merged["err"] = merged["mcp_act"] - merged["mcp_pred"]
                             merged["abs_err"] = merged["err"].abs()
                             merged["pct_err"] = merged.apply(lambda r: (r["abs_err"]/r["mcp_act"]*100.0) if r["mcp_act"] else None, axis=1)
+
                     metrics = compute_forecast_metrics(df_clean, forecast_df, actual_df=actuals if not actuals.empty else None)
                     cards = metric_cards_data(metrics)
 
-                    # display metric cards
                     if show_metrics:
                         st.markdown("#### Forecast Metrics")
                         cols = st.columns(len(cards))
@@ -221,16 +237,24 @@ if run_forecast:
 
                         if merged is not None and not merged.empty:
                             st.markdown("**Error Distribution (actual vs predicted)**")
-                            hist_fig = plot_error_distribution(merged.rename(columns={"mcp_act":"mcp_act","mcp_pred":"mcp_pred","err":"err","abs_err":"abs_err","pct_err":"pct_err"}))
+                            hist_fig = plot_error_distribution(
+                                merged.rename(columns={
+                                    "mcp_act":"mcp_act",
+                                    "mcp_pred":"mcp_pred",
+                                    "err":"err",
+                                    "abs_err":"abs_err",
+                                    "pct_err":"pct_err"
+                                })
+                            )
                             st.plotly_chart(hist_fig, use_container_width=True)
                         else:
                             ci_width = compute_confidence_from_history(df_clean, forecast_df, ci=0.9)
-                            st.info(f"Estimated 90% CI width (proxy from history): {ci_width:.3f} Rs/kWh (used when actuals are not available).")
+                            st.info(f"Estimated 90% CI width from historical volatility: {ci_width:.3f} Rs/kWh")
 
         except Exception as e:
             st.error(f"Forecast API error: {e}")
 
-# Bottom summary & download
+# Bottom summary
 st.markdown("---")
 c1, c2 = st.columns([3, 1])
 with c1:
@@ -240,4 +264,4 @@ with c2:
     csv_bytes = df_clean.to_csv(index=False).encode()
     st.download_button("Download cleaned CSV", data=csv_bytes, file_name="mcp_cleaned.csv", mime="text/csv")
 
-st.caption("Tip: Use the range selector (1D / 7D / 1M / All) and the rangeslider to quickly inspect windows. Weekend bands and day labels help spot patterns.")
+st.caption("Use 1D / 7D / 1M / ALL for quick exploration. Weekend highlights help detect patterns.")
