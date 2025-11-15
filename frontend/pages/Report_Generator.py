@@ -1,82 +1,31 @@
 # frontend/utils/Report_Generator.py
-# ============================================================
-# FINAL COMPLETE REPORT GENERATOR
-#
-# Generates a professional PDF report containing:
-#  • Hero title block
-#  • MCP Market-Style Chart (exported PNG)
-#  • 7-Day Charge/Discharge Opportunity Heatmap
-#  • Summary Metrics
-#  • DVC Logo (if asset available)
-#
-# Dependencies:
-#   - reportlab
-#   - plotly
-#   - pandas, numpy
-#
-# The PDF is returned as in-memory bytes for Streamlit download.
-# ============================================================
-
+# Lightweight PDF report generator using reportlab + Plotly (kaleido)
 import io
 import base64
 from pathlib import Path
-
 import pandas as pd
-import numpy as np
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Image,
-    Table,
-    TableStyle
-)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
-from plot_helpers import (
-    prepare_df,
-    market_style_line,
-    heatmap_last7_with_bands
-)
+from plot_helpers import prepare_df, market_style_line, heatmap_last7_with_bands
 
-# --------------------------------------
-# Helper: Convert Plotly Figure → PNG
-# --------------------------------------
+# convert plotly fig to PNG bytes (kaleido required)
 def fig_to_png_bytes(fig, width=1200, height=700):
-    # Use kaleido backend
-    png_bytes = fig.to_image(
-        format="png",
-        width=width,
-        height=height,
-        scale=2
-    )
+    png_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
     return io.BytesIO(png_bytes)
 
-
-# --------------------------------------
-# Helper: load DVC logo base64 if exists
-# --------------------------------------
 def load_dvc_logo_base64():
-    candidates = [
-        Path("frontend/assets/dvc_logo.png"),
-        Path("frontend/assets/dvc_logo.jpg"),
-        Path("frontend/assets/dvc_logo.png.jpg"),
-    ]
+    candidates = [Path("frontend/assets/dvc_logo.png"), Path("frontend/assets/dvc_logo.jpg"), Path("frontend/assets/dvc_logo.png.jpg")]
     for p in candidates:
         if p.exists():
             b = p.read_bytes()
             return base64.b64encode(b).decode("ascii")
     return None
 
-
-# --------------------------------------
-# Generate summary text for report
-# --------------------------------------
 def build_summary_table(df):
     df = prepare_df(df)
-
     summary_data = [
         ["Summary Metric", "Value"],
         ["Start Date", str(df["timestamp"].min())],
@@ -87,57 +36,32 @@ def build_summary_table(df):
         ["Min MCP", f"{df['mcp'].min():.3f}"],
         ["Max MCP", f"{df['mcp'].max():.3f}"]
     ]
-
     table = Table(summary_data, colWidths=[180, 260])
-    table.setStyle(
-        TableStyle(
-            [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0f1117")),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
-
-                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#1a1d26")),
-                ('TEXTCOLOR', (0, 1), (-1, -1), colors.white),
-
-                ('BOX', (0, 0), (-1, -1), 1, colors.gray),
-                ('GRID', (0, 0), (-1, -1), 0.3, colors.gray)
-            ]
-        )
-    )
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0f1117")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#1a1d26")),
+        ('TEXTCOLOR', (0,1), (-1,-1), colors.white),
+        ('BOX', (0,0), (-1,-1), 1, colors.gray),
+        ('GRID', (0,0), (-1,-1), 0.3, colors.gray)
+    ]))
     return table
 
-
-# --------------------------------------
-# MAIN FUNCTION: Generate PDF Report
-# --------------------------------------
 def generate_pdf_report(df):
-    """
-    Returns PDF bytes buffer of the full report.
-    Usage:
-        pdf_bytes = generate_pdf_report(df)
-        st.download_button("Download Report", data=pdf_bytes, ...)
-    """
     df_clean = prepare_df(df)
-
-    # Generate figures
     fig_market = market_style_line(df_clean)
     fig_heatmap = heatmap_last7_with_bands(df_clean)
-
-    # Convert figs → PNG
     png_market = fig_to_png_bytes(fig_market)
     png_heat = fig_to_png_bytes(fig_heatmap)
 
-    # PDF buffer
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
-
     styles = getSampleStyleSheet()
     story = []
 
-    # Header section
     dvc_b64 = load_dvc_logo_base64()
     if dvc_b64:
         story.append(Image(io.BytesIO(base64.b64decode(dvc_b64)), width=70, height=70))
@@ -147,31 +71,25 @@ def generate_pdf_report(df):
     story.append(Paragraph("Excel through Intelligence", styles["Heading3"]))
     story.append(Spacer(1, 15))
 
-    # Summary Table
     story.append(Paragraph("<b>Dataset Summary</b>", styles["Heading2"]))
     story.append(Spacer(1, 6))
     story.append(build_summary_table(df_clean))
     story.append(Spacer(1, 24))
 
-    # Market Chart
     story.append(Paragraph("<b>MCP Time Series — Market Style</b>", styles["Heading2"]))
     story.append(Spacer(1, 6))
     story.append(Image(png_market, width=460, height=270))
     story.append(Spacer(1, 24))
 
-    # Heatmap
     story.append(Paragraph("<b>7-Day Charge/Discharge Opportunity Heatmap</b>", styles["Heading2"]))
     story.append(Spacer(1, 6))
     story.append(Image(png_heat, width=460, height=270))
     story.append(Spacer(1, 24))
 
-    # Footer
     story.append(Spacer(1, 18))
     story.append(Paragraph("<i>Generated automatically by BESS Scheduler Intelligence</i>", styles["Italic"]))
 
-    # Build PDF
     doc.build(story)
     pdf_bytes = buffer.getvalue()
     buffer.close()
-
     return pdf_bytes
