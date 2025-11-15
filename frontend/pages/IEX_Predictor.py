@@ -1,9 +1,6 @@
 # frontend/pages/IEX_Predictor.py
-# FINAL VERSION (with PDF report generation integrated)
-
 import sys
 from pathlib import Path
-
 CURRENT_DIR = Path(__file__).resolve()
 UTILS_DIR = CURRENT_DIR.parent.parent / "utils"
 ASSETS_DIR = CURRENT_DIR.parent.parent / "assets"
@@ -16,19 +13,12 @@ import requests
 
 from plot_helpers import market_style_line, heatmap_last7_with_bands, plot_forecast_with_ci, prepare_df
 from forecast_metrics import compute_forecast_metrics, metric_cards_data, plot_error_distribution, compute_confidence_from_history
-from Report_Generator import generate_pdf_report   # <-- PDF REPORT IMPORT
+from Report_Generator import generate_pdf_report
 
 st.set_page_config(page_title="BESS Scheduler Intelligence", layout="wide", initial_sidebar_state="expanded")
 
-# ---------------------------
-# Helper: embed images as base64 if available
-# ---------------------------
 def _load_asset_base64(asset_name):
-    candidates = [
-        ASSETS_DIR / asset_name,
-        CURRENT_DIR.parent.parent / asset_name,
-        Path(asset_name)
-    ]
+    candidates = [ASSETS_DIR / asset_name, CURRENT_DIR.parent.parent / asset_name, Path(asset_name)]
     for p in candidates:
         try:
             if p.exists():
@@ -43,9 +33,6 @@ def _load_asset_base64(asset_name):
 banner_b64 = _load_asset_base64("bess_image.png") or _load_asset_base64("bess_image.png.jpg") or _load_asset_base64("bess_image.jpg")
 dvc_b64 = _load_asset_base64("dvc_logo.png") or _load_asset_base64("dvc_logo.png.jpg") or _load_asset_base64("dvc_logo.jpg")
 
-# -----------------------------
-# Header / Banner (base64 embedded)
-# -----------------------------
 if banner_b64:
     hero_html = f"""
     <style>
@@ -85,17 +72,14 @@ else:
 
 st.markdown(hero_html, unsafe_allow_html=True)
 
-# -----------------------
-# Sidebar: upload + official links mini-panel
-# -----------------------
+# Sidebar
 st.sidebar.title("Upload & Links")
 st.sidebar.markdown("Upload MCP CSV / XLSX (timestamp + price).")
 uploaded = st.sidebar.file_uploader("Choose file", type=["csv", "xlsx", "xls"], accept_multiple_files=False)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("🔗 Official Links")
-st.sidebar.markdown(
-    """
+st.sidebar.markdown("""
     <div style="max-height:220px; overflow:auto; padding-right:6px;">
       <a href="https://iexindia.com" target="_blank">• IEX Market Portal</a><br>
       <a href="https://posoco.in" target="_blank">• POSOCO / NLDC</a><br>
@@ -103,15 +87,11 @@ st.sidebar.markdown(
       <a href="https://www.dvc.gov.in" target="_blank">• Damodar Valley Corporation (DVC)</a><br>
       <a href="https://cercind.gov.in" target="_blank">• CERC</a><br>
     </div>
-    """, unsafe_allow_html=True
-)
-
+    """, unsafe_allow_html=True)
 st.sidebar.markdown("---")
 st.sidebar.caption("Tip: Use 1W or 1M selector to zoom. Heatmap shows best charge (blue) and discharge (red) bands.")
 
-# -----------------------
-# Load data (global session state)
-# -----------------------
+# Load data
 if uploaded is not None:
     try:
         if uploaded.name.lower().endswith((".xls", ".xlsx")):
@@ -128,7 +108,7 @@ if df is None:
     st.warning("Please upload MCP CSV/XLSX in the left sidebar to view the dashboard.")
     st.stop()
 
-# Prepare / validate and auto-scale
+# Prepare
 try:
     df_clean = prepare_df(df)
 except Exception as e:
@@ -145,9 +125,7 @@ with st.expander("Visualization Options", expanded=False):
         low_pct = st.slider("Charge band percentile (low)", 1, 40, 20)
         high_pct = st.slider("Discharge band percentile (high)", 60, 99, 80)
 
-# -----------------------
-# Full-width stacked windows: Chart then Heatmap
-# -----------------------
+# Charts
 st.subheader("MCP Time Series")
 try:
     fig_market = market_style_line(df_clean, smoothing=smoothing)
@@ -163,25 +141,15 @@ try:
 except Exception as e:
     st.error(f"Heatmap rendering error: {e}")
 
-# -----------------------
-# PDF REPORT GENERATOR BUTTON
-# -----------------------
+# PDF button
 st.markdown("---")
 st.subheader("📄 Generate PDF Report")
-
 if st.button("Generate PDF Report"):
     with st.spinner("Building PDF report..."):
         pdf_bytes = generate_pdf_report(df_clean)
-    st.download_button(
-        "Download MCP Report (PDF)",
-        data=pdf_bytes,
-        file_name="BESS_MCP_Report.pdf",
-        mime="application/pdf"
-    )
+    st.download_button("Download MCP Report (PDF)", data=pdf_bytes, file_name="BESS_MCP_Report.pdf", mime="application/pdf")
 
-# -----------------------
 # Forecast block
-# -----------------------
 st.markdown("---")
 st.subheader("Forecast (1–7 days)")
 col1, col2, col3 = st.columns([2,1,1])
@@ -198,11 +166,7 @@ if run_forecast:
     if not API:
         st.error("Backend API_BASE not found in Streamlit secrets.")
     else:
-        payload = {
-            "data": df_clean.to_dict(orient="records"),
-            "horizon_days": int(horizon),
-            "model_name": model
-        }
+        payload = {"data": df_clean.to_dict(orient="records"), "horizon_days": int(horizon), "model_name": model}
         try:
             with st.spinner("Running backend forecast..."):
                 r = requests.post(f"{API}/predict/", json=payload, timeout=120)
@@ -237,24 +201,15 @@ if run_forecast:
 
                         if merged is not None and not merged.empty:
                             st.markdown("**Error Distribution (actual vs predicted)**")
-                            hist_fig = plot_error_distribution(
-                                merged.rename(columns={
-                                    "mcp_act":"mcp_act",
-                                    "mcp_pred":"mcp_pred",
-                                    "err":"err",
-                                    "abs_err":"abs_err",
-                                    "pct_err":"pct_err"
-                                })
-                            )
+                            hist_fig = plot_error_distribution(merged)
                             st.plotly_chart(hist_fig, use_container_width=True)
                         else:
                             ci_width = compute_confidence_from_history(df_clean, forecast_df, ci=0.9)
                             st.info(f"Estimated 90% CI width from historical volatility: {ci_width:.3f} Rs/kWh")
-
         except Exception as e:
             st.error(f"Forecast API error: {e}")
 
-# Bottom summary
+# Bottom summary & download CSV
 st.markdown("---")
 c1, c2 = st.columns([3, 1])
 with c1:
