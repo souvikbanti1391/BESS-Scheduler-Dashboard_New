@@ -1,20 +1,30 @@
-# ============================================
-#   IEX MCP Predictor – Full Visual Suite
-#   Ready-to-Paste Complete Page File
-# ============================================
+# ============================================================
+#   IEX MCP Predictor — Fully Working Version With Path Fix
+# ============================================================
+
+# --- FIX: Force Streamlit to correctly load utils ----
+import sys
+import os
+from pathlib import Path
+
+CURRENT_DIR = Path(__file__).resolve()
+UTILS_DIR = CURRENT_DIR.parent.parent / "utils"
+sys.path.append(str(UTILS_DIR))
+
+# ------------------------------------------------------
 
 import streamlit as st
 import pandas as pd
 import requests
 
-from utils.api_helpers import sanitize_df_for_json
-from utils.plot_helpers import (
+from api_helpers import sanitize_df_for_json
+from plot_helpers import (
     gradient_line_with_delta,
     heatmap_hour_by_date,
     daily_profile_comparison,
     mcp_histogram
 )
-from utils.insight_helpers import compute_insights
+from insight_helpers import compute_insights
 
 
 # -----------------------------
@@ -32,7 +42,6 @@ if df is None:
     st.warning("⚠️ Please upload MCP data from the left sidebar before using this page.")
     st.stop()
 
-# Clean DataFrame for display safety
 df_display = df.copy()
 df_display["timestamp"] = pd.to_datetime(df_display["timestamp"], errors="coerce")
 
