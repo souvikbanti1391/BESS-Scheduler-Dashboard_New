@@ -1,10 +1,12 @@
 # frontend/utils/plot_helpers.py
 # ============================================================
 # Plot helpers for IEX Predictor — Dark theme, market-style chart
-# - prepare_df: cleans & scales MCP to Rs/kWh
-# - market_style_line: full-width stock-like line with weekend bands,
-#                     separators, day labels, animated transitions
-# - heatmap_last7_with_bands: 7-day hourly heatmap with bands
+# Includes:
+#  - prepare_df  (parsing + Rs/MWh -> Rs/kWh scaling)
+#  - market_style_line (full-width, weekend bands, day separators, animated transitions)
+#  - heatmap_last7_with_bands (7-day banded heatmap)
+#  - plot_forecast_with_ci (forecast plot with confidence band)
+#  - small helpers
 # ============================================================
 
 import pandas as pd
@@ -12,6 +14,8 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import timedelta
+import math
+from scipy.stats import norm
 
 # ---------------------------
 # Data preparation
@@ -24,6 +28,7 @@ def prepare_df(df):
       - mcp (float, Rs/kWh)
       - hour (0..23)
       - date_str (YYYY-MM-DD)
+      - dow (day name)
       - delta (mcp - prev)
     """
     df = df.copy()
@@ -45,7 +50,7 @@ def prepare_df(df):
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     # Identify MCP column
-    mcp_candidates = [c for c in df.columns if c.lower() in ("mcp", "price", "mcp_inr", "mcp_inr/kwh", "mcp_rs")]
+    mcp_candidates = [c for c in df.columns if c.lower() in ("mcp", "price", "mcp_inr", "mcp_inr/kwh", "mcp_rs", "price_inr")]
     if not mcp_candidates:
         numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != "timestamp"]
         mcp_col = numeric_cols[0] if numeric_cols else None
@@ -73,7 +78,7 @@ def prepare_df(df):
 # ---------------------------
 # Helper: create weekend bands & separators & day labels
 # ---------------------------
-def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_color="rgba(70,70,120,0.12)", sunday_color="rgba(80,40,120,0.16)"):
+def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_color="rgba(70,70,120,0.10)", sunday_color="rgba(80,40,120,0.14)"):
     """
     Returns tuple (shapes, annotations)
     shapes: rectangle bands for Saturday/Sunday and vertical dotted separators
@@ -85,18 +90,20 @@ def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_colo
     if df.empty:
         return shapes, annotations
 
-    # Determine full-day boundaries using UTC midnight of each day in the timestamps timezone
     df = df.copy()
     df["date_only"] = df["timestamp"].dt.normalize()  # midnight
     unique_dates = df["date_only"].drop_duplicates().sort_values().tolist()
 
     # If y_min/y_max not provided, compute defaults
     if y_min is None or y_max is None:
-        y_min = float(df["mcp"].min() * 0.98)
-        y_max = float(df["mcp"].max() * 1.02)
+        if df["mcp"].empty:
+            y_min, y_max = 0, 1
+        else:
+            y_min = float(df["mcp"].min() * 0.98)
+            y_max = float(df["mcp"].max() * 1.02)
 
     for d in unique_dates:
-        day_name = d.day_name()
+        day_name = d.strftime("%A")
         start = d
         end = d + timedelta(days=1)
         # Saturday
@@ -130,7 +137,7 @@ def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_colo
                 line_width=0
             ))
 
-        # Vertical dotted separator at midnight (except first)
+        # Vertical dotted separator at midnight (including first for consistent spacing)
         shapes.append(dict(
             type="line",
             xref="x",
@@ -139,11 +146,11 @@ def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_colo
             x1=start,
             y0=y_min,
             y1=y_max,
-            line=dict(color="rgba(200,200,200,0.12)", width=1, dash="dot"),
+            line=dict(color="rgba(200,200,200,0.08)", width=1, dash="dot"),
             layer="above"
         ))
 
-        # Day label annotation at the top
+        # Day label centered above the day range
         annotations.append(dict(
             x=start + timedelta(hours=12),
             y=y_max,
@@ -151,7 +158,7 @@ def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_colo
             yref="y",
             text=d.strftime("%a").upper(),
             showarrow=False,
-            font=dict(color="rgba(200,200,200,0.35)", size=11),
+            font=dict(color="rgba(200,200,200,0.28)", size=11),
             xanchor="center",
             yanchor="bottom",
             bgcolor="rgba(0,0,0,0)"
@@ -166,7 +173,7 @@ def _create_day_shapes_and_annotations(df, y_min=None, y_max=None, saturday_colo
 def market_style_line(df,
                       title="MCP (Rs/kWh) — Market Style",
                       line_color="#39D98A",   # mint green
-                      area_fill="rgba(57,217,138,0.12)",
+                      area_fill="rgba(57,217,138,0.10)",
                       smoothing=True):
     """
     Returns a Plotly Figure tailored for a dark-themed market style visualization.
@@ -181,34 +188,35 @@ def market_style_line(df,
     if df.empty:
         raise ValueError("No data after parsing.")
 
-    # Optionally compute a smooth line via rolling mean (small window)
     plot_x = df["timestamp"]
     plot_y = df["mcp"]
 
     if smoothing and len(df) >= 5:
-        # a mild rolling window (3) to smooth jitter without losing spikes
         y_smooth = df["mcp"].rolling(window=3, min_periods=1, center=True).mean()
     else:
         y_smooth = plot_y
 
     vmin = float(np.nanmin(plot_y))
     vmax = float(np.nanmax(plot_y))
+    if math.isclose(vmin, vmax):
+        vmax = vmin + 1.0
 
     fig = go.Figure()
 
-    # area (fill) - subtle
+    # area (fill) + line
     fig.add_trace(go.Scatter(
         x=plot_x,
         y=y_smooth,
         mode="lines",
-        line=dict(color=line_color, width=2.5),
+        line=dict(color=line_color, width=2.6),
         fill="tozeroy",
         fillcolor=area_fill,
         hoverinfo="skip",
-        name="MCP area"
+        name="MCP"
     ))
 
-    # thin invisible marker trace for hover + crosshair details (we show custom hover)
+    # Invisible markers for hover (shows customdata)
+    customdata = np.vstack([df["dow"].values, df["delta"].values]).T
     fig.add_trace(go.Scatter(
         x=plot_x,
         y=plot_y,
@@ -221,10 +229,10 @@ def market_style_line(df,
             "%{x|%H:%M} — %{customdata[0]}<br>"
             "Δ prev hr: %{customdata[1]:+.3f} Rs/kWh<extra></extra>"
         ),
-        customdata=np.vstack([df["dow"].values, df["delta"].values]).T
+        customdata=customdata
     ))
 
-    # Layout: dark, crosshair
+    # Weekend bands, separators, day labels
     shapes, annotations = _create_day_shapes_and_annotations(df, y_min=vmin * 0.98, y_max=vmax * 1.02)
 
     fig.update_layout(
@@ -233,7 +241,7 @@ def market_style_line(df,
             type="date",
             showspikes=True,
             spikemode="across",
-            spikecolor="rgba(255,255,255,0.08)",
+            spikecolor="rgba(255,255,255,0.06)",
             spikesnap="cursor",
             rangeselector=dict(
                 buttons=list([
@@ -254,12 +262,10 @@ def market_style_line(df,
         hovermode="x unified",
         shapes=shapes,
         annotations=annotations,
-        transition=dict(duration=450, easing="cubic-in-out")
+        transition=dict(duration=400, easing="cubic-in-out")
     )
 
-    # Add a subtle top margin for day labels not to overlap
     fig.update_layout(margin=dict(t=80, b=60, l=60, r=40))
-
     return fig
 
 
@@ -276,7 +282,6 @@ def heatmap_last7_with_bands(df, low_pct=20, high_pct=80, title="Last 7 days —
     """
     df = prepare_df(df)
 
-    # Focus on last 7 days of data based on timestamp
     max_ts = df["timestamp"].max()
     start_ts = max_ts - pd.Timedelta(days=7)
     df7 = df[df["timestamp"] >= start_ts].copy()
@@ -338,6 +343,89 @@ def heatmap_last7_with_bands(df, low_pct=20, high_pct=80, title="Last 7 days —
         template="plotly_dark",
         height=560,
         margin=dict(t=72, b=40, l=60, r=40)
+    )
+
+    return fig
+
+
+# ---------------------------
+# Forecast plot with CI
+# ---------------------------
+def plot_forecast_with_ci(history_df, forecast_df, ci=0.9):
+    """
+    history_df : historical dataframe with 'timestamp' and 'mcp'
+    forecast_df: dataframe with 'timestamp' and 'mcp' (predictions)
+    ci: confidence interval (0.9 => 90%)
+    Returns Plotly figure with:
+      - history line
+      - forecast line
+      - shaded CI around forecast (computed from historical residuals/vol)
+    """
+    history = prepare_df(history_df)
+    forecast = forecast_df.copy()
+    forecast["timestamp"] = pd.to_datetime(forecast["timestamp"], errors="coerce")
+    forecast["mcp"] = pd.to_numeric(forecast["mcp"], errors="coerce")
+
+    # Use historical residuals (if user had previous forecasts, we would use them)
+    # Fallback: use recent historical hourly returns std as proxy for uncertainty
+    # Use last 7*24 hours standard deviation
+    recent = history.tail(24 * 7)
+    if recent.empty:
+        sigma = float(history["mcp"].std()) if not history["mcp"].empty else 0.0
+    else:
+        # Use std of hourly change (delta) as proxy
+        sigma = float(recent["mcp"].diff().std())
+        if np.isnan(sigma) or sigma <= 0:
+            sigma = float(history["mcp"].std())
+
+    # z for two-sided normal
+    z = norm.ppf(0.5 + ci / 2.0) if sigma > 0 else 1.65  # fallback
+
+    # compute CI
+    forecast["lower"] = forecast["mcp"] - z * sigma
+    forecast["upper"] = forecast["mcp"] + z * sigma
+
+    # Build figure
+    fig = go.Figure()
+
+    # historical line
+    fig.add_trace(go.Scatter(
+        x=history["timestamp"],
+        y=history["mcp"],
+        mode="lines",
+        name="History",
+        line=dict(color="rgba(180,180,200,0.9)", width=1.8)
+    ))
+
+    # forecast line
+    fig.add_trace(go.Scatter(
+        x=forecast["timestamp"],
+        y=forecast["mcp"],
+        mode="lines+markers",
+        name="Forecast",
+        line=dict(color="#39D98A", width=2.4)
+    ))
+
+    # CI band
+    fig.add_trace(go.Scatter(
+        x=list(forecast["timestamp"]) + list(forecast["timestamp"][::-1]),
+        y=list(forecast["upper"]) + list(forecast["lower"][::-1]),
+        fill="toself",
+        fillcolor="rgba(57,217,138,0.12)",
+        line=dict(color="rgba(255,255,255,0)"),
+        hoverinfo="skip",
+        showlegend=True,
+        name=f"{int(ci*100)}% CI"
+    ))
+
+    fig.update_layout(
+        title=f"Forecast + {int(ci*100)}% Confidence Interval",
+        xaxis=dict(type="date", tickformat="%d-%b %H:%M"),
+        yaxis=dict(title="MCP (Rs/kWh)"),
+        template="plotly_dark",
+        height=520,
+        hovermode="x unified",
+        transition=dict(duration=350, easing="cubic-in-out")
     )
 
     return fig
