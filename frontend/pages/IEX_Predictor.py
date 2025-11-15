@@ -1,14 +1,8 @@
 # frontend/pages/IEX_Predictor.py
-# ============================================================
-# IEX MCP Predictor — Market-style dashboard (dark theme)
-# - Full-width stacked windows: MCP chart, 7-day heatmap
-# - Base64-embedded banner + logo (if assets exist in frontend/assets/)
-# - Forecast integration: when user runs backend predict, show forecast plot with CI and metrics
-# ============================================================
-
-# PATH fix (so utils imports work reliably in Streamlit Cloud)
+# Final corrected predictor page — uses backend API (set API_BASE in Streamlit secrets)
 import sys
 from pathlib import Path
+
 CURRENT_DIR = Path(__file__).resolve()
 UTILS_DIR = CURRENT_DIR.parent.parent / "utils"
 ASSETS_DIR = CURRENT_DIR.parent.parent / "assets"
@@ -16,9 +10,7 @@ sys.path.append(str(UTILS_DIR))
 
 import streamlit as st
 import pandas as pd
-import io
 import base64
-import os
 import requests
 
 from plot_helpers import market_style_line, heatmap_last7_with_bands, plot_forecast_with_ci, prepare_df
@@ -30,11 +22,6 @@ st.set_page_config(page_title="BESS Scheduler Intelligence", layout="wide", init
 # Helper: embed images as base64 if available
 # ---------------------------
 def _load_asset_base64(asset_name):
-    """
-    Attempts to load asset_name from frontend/assets/ or given path.
-    Returns data URI (base64) or None
-    """
-    # try relative path inside repo
     candidates = [
         ASSETS_DIR / asset_name,
         CURRENT_DIR.parent.parent / asset_name,
@@ -51,14 +38,12 @@ def _load_asset_base64(asset_name):
             continue
     return None
 
-# attempt to load banner and logo (use files you said you uploaded earlier)
 banner_b64 = _load_asset_base64("bess_image.png") or _load_asset_base64("bess_image.png.jpg") or _load_asset_base64("bess_image.jpg")
 dvc_b64 = _load_asset_base64("dvc_logo.png") or _load_asset_base64("dvc_logo.png.jpg") or _load_asset_base64("dvc_logo.jpg")
 
 # -----------------------------
 # Header / Banner (base64 embedded)
 # -----------------------------
-hero_html = ""
 if banner_b64:
     hero_html = f"""
     <style>
@@ -84,7 +69,6 @@ if banner_b64:
     </div>
     """
 else:
-    # fallback simple banner
     hero_html = """
     <div style="padding:18px;border-radius:6px;background-color:#0a0b0f;margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -92,7 +76,7 @@ else:
           <div style="font-size:28px;font-weight:700;color:#fff">BESS Scheduler Intelligence</div>
           <div style="color:rgba(255,255,255,0.8)">Excel through Intelligence</div>
         </div>
-        <div>{}</div>
+        <div></div>
       </div>
     </div>
     """
@@ -212,30 +196,21 @@ if run_forecast:
                     st.info("No forecast returned from backend.")
                 else:
                     forecast_df = pd.DataFrame(forecast_list)
-                    # show forecast plot with CI
                     fig_fc = plot_forecast_with_ci(df_clean, forecast_df, ci=0.9)
                     st.plotly_chart(fig_fc, use_container_width=True)
 
-                    # compute metrics (if we have actuals in the uploaded df for the forecast window)
-                    # Attempt to find actuals overlapping forecast timestamps
-                    try:
-                        # if uploaded contains future actuals (rare), compute errors; else compute proxy metrics
-                        actuals = df_clean[df_clean["timestamp"].isin(pd.to_datetime(forecast_df["timestamp"], errors="coerce"))]
-                        actuals = actuals[["timestamp", "mcp"]].rename(columns={"mcp": "mcp_act"})
-                        # merge to compute actual errors if present
-                        merged = None
-                        if not actuals.empty:
-                            merged = pd.merge(forecast_df.rename(columns={"mcp":"mcp_pred"}), actuals, on="timestamp", how="inner")
-                            if not merged.empty:
-                                merged["err"] = merged["mcp_act"] - merged["mcp_pred"]
-                                merged["abs_err"] = merged["err"].abs()
-                                merged["pct_err"] = merged.apply(lambda r: (r["abs_err"]/r["mcp_act"]*100.0) if r["mcp_act"] else None, axis=1)
-                        # compute numeric metrics
-                        metrics = compute_forecast_metrics(df_clean, forecast_df, actual_df=actuals if not actuals.empty else None)
-                        cards = metric_cards_data(metrics)
-                    except Exception as e:
-                        metrics = compute_forecast_metrics(df_clean, forecast_df, actual_df=None)
-                        cards = metric_cards_data(metrics)
+                    # compute metrics
+                    actuals = df_clean[df_clean["timestamp"].isin(pd.to_datetime(forecast_df["timestamp"], errors="coerce"))]
+                    actuals = actuals[["timestamp", "mcp"]].rename(columns={"mcp": "mcp_act"})
+                    merged = None
+                    if not actuals.empty:
+                        merged = pd.merge(forecast_df.rename(columns={"mcp":"mcp_pred"}), actuals, on="timestamp", how="inner")
+                        if not merged.empty:
+                            merged["err"] = merged["mcp_act"] - merged["mcp_pred"]
+                            merged["abs_err"] = merged["err"].abs()
+                            merged["pct_err"] = merged.apply(lambda r: (r["abs_err"]/r["mcp_act"]*100.0) if r["mcp_act"] else None, axis=1)
+                    metrics = compute_forecast_metrics(df_clean, forecast_df, actual_df=actuals if not actuals.empty else None)
+                    cards = metric_cards_data(metrics)
 
                     # display metric cards
                     if show_metrics:
@@ -244,13 +219,11 @@ if run_forecast:
                         for ccol, card in zip(cols, cards):
                             ccol.metric(card["title"], card["value"])
 
-                        # error distribution histogram if we have merged actuals
-                        if 'merged' in locals() and merged is not None and not merged.empty:
+                        if merged is not None and not merged.empty:
                             st.markdown("**Error Distribution (actual vs predicted)**")
                             hist_fig = plot_error_distribution(merged.rename(columns={"mcp_act":"mcp_act","mcp_pred":"mcp_pred","err":"err","abs_err":"abs_err","pct_err":"pct_err"}))
                             st.plotly_chart(hist_fig, use_container_width=True)
                         else:
-                            # show proxy uncertainty metric visualization using history
                             ci_width = compute_confidence_from_history(df_clean, forecast_df, ci=0.9)
                             st.info(f"Estimated 90% CI width (proxy from history): {ci_width:.3f} Rs/kWh (used when actuals are not available).")
 
