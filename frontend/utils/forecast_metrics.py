@@ -1,16 +1,22 @@
 # frontend/utils/forecast_metrics.py
+# Lightweight forecast metrics (no SciPy, no scikit-learn)
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from scipy.stats import norm
 from math import isnan
 
 def compute_forecast_metrics(history_df, forecast_df, actual_df=None):
+    """
+    If actual_df supplied and overlaps forecast timestamps, compute MAE, RMSE, MAPE, Bias.
+    Otherwise return proxy estimates based on recent volatility.
+    """
     res = {}
     forecast = forecast_df.copy()
     forecast["timestamp"] = pd.to_datetime(forecast["timestamp"], errors="coerce")
     forecast["mcp"] = pd.to_numeric(forecast["mcp"], errors="coerce")
+
     if actual_df is not None and not actual_df.empty:
         actual = actual_df.copy()
         actual["timestamp"] = pd.to_datetime(actual["timestamp"], errors="coerce")
@@ -74,6 +80,11 @@ def compute_confidence_from_history(history_df, forecast_df, ci=0.9):
     sigma = float(recent["mcp"].diff().std()) if not recent.empty else float(hist["mcp"].diff().std() if not hist.empty else 0.0)
     if sigma == 0 or np.isnan(sigma):
         return float('nan')
-    from scipy.stats import norm
-    z = norm.ppf(0.5 + ci / 2.0)
+    # approximate CI width ~ 2 * z * sigma
+    if ci >= 0.95:
+        z = 1.96
+    elif ci >= 0.90:
+        z = 1.645
+    else:
+        z = 1.28
     return float(2.0 * z * sigma)
